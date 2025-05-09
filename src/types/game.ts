@@ -5,7 +5,9 @@ export type GameStatus = 'waiting' | 'playing' | 'finished';
 export interface GameSession {
   id: string;
   hostId: string;
+  hostName: string;
   guestId?: string;
+  guestName?: string;
   board: BoardState;
   currentPlayer: Player;
   status: GameStatus;

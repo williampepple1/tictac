@@ -1,0 +1,93 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isGameHost(gameId) {
+      return isAuthenticated() && 
+        get(/databases/$(database)/documents/games/$(gameId)).data.hostId == request.auth.uid;
+    }
+    
+    function isGameGuest(gameId) {
+      return isAuthenticated() && 
+        get(/databases/$(database)/documents/games/$(gameId)).data.guestId == request.auth.uid;
+    }
+    
+    function isGameParticipant(gameId) {
+      return isGameHost(gameId) || isGameGuest(gameId);
+    }
+    
+    function isValidBoard(board) {
+      return board is list && board.size() == 9 && 
+        board.hasAll(['X', 'O', null]) && 
+        board.hasOnly(['X', 'O', null]);
+    }
+    
+    function isValidGameStatus(status) {
+      return status in ['waiting', 'playing', 'finished'];
+    }
+    
+    function isValidPlayer(player) {
+      return player in ['X', 'O'];
+    }
+    
+    function isValidWinner(winner) {
+      return winner in ['X', 'O', 'draw', null];
+    }
+    
+    function isGameExpired(createdAt) {
+      return request.time > timestamp.date(createdAt.toDate().getTime() + 3 * 24 * 60 * 60 * 1000);
+    }
+
+    // Games collection rules
+    match /games/{gameId} {
+      // Allow read if user is authenticated
+      allow read: if isAuthenticated();
+      
+      // Allow create if user is authenticated and data is valid
+      allow create: if isAuthenticated() &&
+        request.resource.data.hostId == request.auth.uid &&
+        request.resource.data.hostName is string &&
+        isValidBoard(request.resource.data.board) &&
+        request.resource.data.currentPlayer == 'X' &&
+        request.resource.data.status == 'waiting' &&
+        request.resource.data.winner == null &&
+        request.resource.data.createdAt is timestamp &&
+        request.resource.data.lastMoveAt is timestamp;
+      
+      // Allow update if user is game participant and data is valid
+      allow update: if isGameParticipant(gameId) &&
+        // Only allow updating specific fields
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['board', 'currentPlayer', 'status', 'winner', 'guestId', 'guestName', 'lastMoveAt']) &&
+        // Validate board if it's being updated
+        (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['board']) ||
+          isValidBoard(request.resource.data.board)) &&
+        // Validate status if it's being updated
+        (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['status']) ||
+          isValidGameStatus(request.resource.data.status)) &&
+        // Validate currentPlayer if it's being updated
+        (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['currentPlayer']) ||
+          isValidPlayer(request.resource.data.currentPlayer)) &&
+        // Validate winner if it's being updated
+        (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['winner']) ||
+          isValidWinner(request.resource.data.winner)) &&
+        // Validate guestId if it's being updated
+        (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['guestId']) ||
+          request.resource.data.guestId == request.auth.uid) &&
+        // Validate guestName if it's being updated
+        (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['guestName']) ||
+          request.resource.data.guestName is string) &&
+        // Validate lastMoveAt if it's being updated
+        (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['lastMoveAt']) ||
+          request.resource.data.lastMoveAt is timestamp);
+      
+      // Allow delete if game is expired or user is game participant
+      allow delete: if isGameExpired(resource.data.createdAt) || isGameParticipant(gameId);
+    }
+  }
+} 

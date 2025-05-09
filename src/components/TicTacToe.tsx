@@ -2,13 +2,17 @@ import { useState, useEffect } from 'react';
 import { collection, addDoc, updateDoc, doc, onSnapshot, query, where, Timestamp } from 'firebase/firestore';
 import { db } from '../config/firebase';
 import { WebRTCService } from '../services/webrtc';
-import { BoardState, GameSession, GameMove, Player } from '../types/game';
+import type { BoardState, GameSession, GameMove, Player } from '../types/game';
 
-const TicTacToe = () => {
+interface TicTacToeProps {
+  gameId: string;
+  onGameEnd: () => void;
+}
+
+const TicTacToe = ({ gameId, onGameEnd }: TicTacToeProps) => {
   const [board, setBoard] = useState<BoardState>(Array(9).fill(null));
   const [currentPlayer, setCurrentPlayer] = useState<Player>('X');
   const [gameSession, setGameSession] = useState<GameSession | null>(null);
-  const [isHost, setIsHost] = useState(false);
   const [webrtc] = useState(() => new WebRTCService());
 
   const checkWinner = (board: BoardState): Player | 'draw' | null => {
@@ -44,14 +48,15 @@ const TicTacToe = () => {
 
     const winner = checkWinner(newBoard);
     if (winner) {
-      await updateDoc(doc(db, 'games', gameSession.id), {
+      await updateDoc(doc(db, 'games', gameId), {
         board: newBoard,
         status: 'finished',
         winner,
         lastMoveAt: Timestamp.now()
       });
+      onGameEnd();
     } else {
-      await updateDoc(doc(db, 'games', gameSession.id), {
+      await updateDoc(doc(db, 'games', gameId), {
         board: newBoard,
         currentPlayer: currentPlayer === 'X' ? 'O' : 'X',
         lastMoveAt: Timestamp.now()
@@ -59,52 +64,39 @@ const TicTacToe = () => {
     }
   };
 
-  const createGame = async () => {
-    const newGame: Omit<GameSession, 'id'> = {
-      hostId: 'user1', // Replace with actual user ID
-      board: Array(9).fill(null),
-      currentPlayer: 'X',
-      status: 'waiting',
-      winner: null,
-      createdAt: new Date(),
-      lastMoveAt: new Date()
-    };
-
-    const docRef = await addDoc(collection(db, 'games'), newGame);
-    setGameSession({ ...newGame, id: docRef.id });
-    setIsHost(true);
-  };
-
   useEffect(() => {
-    if (gameSession) {
-      const q = query(collection(db, 'games'), where('id', '==', gameSession.id));
-      const unsubscribe = onSnapshot(q, (snapshot) => {
-        snapshot.docChanges().forEach((change) => {
-          if (change.type === 'modified') {
-            const updatedGame = change.doc.data() as GameSession;
-            setGameSession(updatedGame);
-            setBoard(updatedGame.board);
-            setCurrentPlayer(updatedGame.currentPlayer);
-          }
-        });
+    const q = query(collection(db, 'games'), where('id', '==', gameId));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      snapshot.docChanges().forEach((change) => {
+        if (change.type === 'modified') {
+          const updatedGame = change.doc.data() as GameSession;
+          setGameSession(updatedGame);
+          setBoard(updatedGame.board);
+          setCurrentPlayer(updatedGame.currentPlayer);
+        }
       });
+    });
 
-      return () => unsubscribe();
-    }
-  }, [gameSession]);
+    return () => unsubscribe();
+  }, [gameId]);
 
   return (
-    <div className="game">
-      <div className="status">
+    <div className="flex flex-col items-center space-y-6">
+      <div className="text-2xl font-bold text-gray-700">
         {gameSession?.status === 'waiting' && 'Waiting for opponent...'}
         {gameSession?.status === 'playing' && `Current player: ${currentPlayer}`}
         {gameSession?.status === 'finished' && `Winner: ${gameSession.winner}`}
       </div>
-      <div className="board">
+      <div className="grid grid-cols-3 gap-2 bg-gray-800 p-2 rounded-lg">
         {board.map((cell, index) => (
           <button
             key={index}
-            className="cell"
+            className={`
+              w-20 h-20 text-4xl font-bold rounded
+              ${cell === null ? 'bg-white hover:bg-gray-100' : 'bg-white'}
+              ${gameSession?.status !== 'playing' ? 'cursor-not-allowed' : 'cursor-pointer'}
+              transition-colors duration-200
+            `}
             onClick={() => handleCellClick(index)}
             disabled={cell !== null || gameSession?.status !== 'playing'}
           >
@@ -112,9 +104,6 @@ const TicTacToe = () => {
           </button>
         ))}
       </div>
-      {!gameSession && (
-        <button onClick={createGame}>Create New Game</button>
-      )}
     </div>
   );
 };
